@@ -1,0 +1,13 @@
+{
+  "name": "Cortex TPIU",
+  "apiVersion": "1.0.0",
+  "author": "James G. Smith",
+  "version": "0.0.1",
+  "description": "ARM Cortex TPIU ITM/DWT utilities",
+  "extensions": {
+  "TPIU": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "debug.TPIU"
+    }
+  }
+}
