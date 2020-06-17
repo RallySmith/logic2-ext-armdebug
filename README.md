@@ -17,6 +17,19 @@ RTOS/application specific instrument records:
 
 ![instrumentation](docs/tpiu_port24_instrumentation.png "instrumentation")
 
+It would be nice if the Saleae HLA API `frame` format could accept a
+colour value so that a single analyser instance could use different
+packet colouring depending on contents (e.g. highlighting errors, or
+different packet destinations/encodings, etc.). That way when dealing
+with large amounts of interleaved data (as a TPIU stream can have) it
+would be easier to scan when zooming around the capture. At the moment
+it can be a tedious process scanning across a capture looking for
+specific types.
+
+As a workaround extended the choice of `Decode Style` options exposed
+by this analyser could make it easier to highlight specific pieces of
+information.
+
 ## Configuration
 
 ### `All`
