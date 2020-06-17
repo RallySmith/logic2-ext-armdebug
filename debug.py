@@ -1,26 +1,5 @@
 # ARM Debug High Level Analyzer extension
 
-# Since the Saleae extension API does not allow nested extensions; we
-# abstract the lower-layers inside this source file so that we can
-# provide the higher level decodings:
-
-#                      +--- port0
-#                      |
-#          +--- ITM ---+--- portN
-#          |           |
-#          |           +--- portX --  Instrumentation -- O/S specific decoding
-#          |
-#  TPIU ---+
-#          |
-#          +--- ETM
-
-# The ITM port is just be a setting: [All|0|1|...|x]
-
-# So we provide a single extension with a setting that decides how the
-# debug data is decoded. We then allow the user to have multiple ins
-# instances of the extension if they want to show the different
-# embedded data fields.
-
 # ETMv3 - Cortex-M, etc.
 # PFTv1 - Cortex-A9, Cortex-A12 and Cortex-A15
 # ETMv4 - Cortex-R7, Cortex-A53 and Cortex-A57
@@ -48,15 +27,6 @@ class DecodeStyle(IntEnum):
     Port = 1 # decode specific port# only
     Console = 2 # decode specific port# as ASCII console
     Instrumentation = 3 # decode specific port# as eCosPro style multi-frame O/S instrumentation
-
-# NOTE: eCosPro instrumentation (default traceport 24, but can be arbitrary port#)
-# Consists of:
-#  2-byte header : 0xNNSS : NN=number of fields : SS=sequence#
-#    NN * 4-byte : instrumentation record (structure) fields
-#    1-byte tail : 0xSS : SS=sequence#
-#
-# An encoded 5 word instrumentation record takes ~150us to be transferred over
-# an 8N1 2MHz UART (SWO) connection.
 
 # ITM
 # Synchronisation:
