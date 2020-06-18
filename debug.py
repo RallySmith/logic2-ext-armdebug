@@ -10,7 +10,7 @@ from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, StringSetting, Nu
 from enum import IntEnum
 
 class TPIU_FSM(IntEnum):
-    HDR = 9 # waiting for header byte
+    HDR = 255 # waiting for header byte
     # ITM (instrumentation)
     ITM1 = 1
     ITM2 = 2
@@ -21,6 +21,13 @@ class TPIU_FSM(IntEnum):
     DWT2 = 6
     DWT3 = 7
     DWT4 = 8
+    # EXT (extension)
+    EXT = 9
+    # LTS (Local TimeStamp)
+    LTS = 10
+    # GTS (Global TimeStamp)
+    GTS1 = 11
+    GTS2 = 12
 
 class DecodeStyle(IntEnum):
     All = 0 # decode all data : ignore port# setting
@@ -116,7 +123,6 @@ class Instrumentation:
             self.lastseq = snum
             self.sequence = 256
             return nf
-
         elif size == 2:
             # head
             nf = None
@@ -192,6 +198,8 @@ class PktCtx:
             if paddr != self.portaddr:
                 return None
             else:
+                #data_str = 'DBG:Instrumentation: {0:d}'.format(paddr) # TODO:REMOVE
+                #return AnalyzerFrame('console', self.start_time, self.end_time, {'val': data_str }) # TODO:REMOVE
                 if self.instrumentation == None:
                     self.instrumentation = Instrumentation()
                 return self.instrumentation.packet(self.start_time, frame.end_time, self.size, self.pdata)
@@ -287,7 +295,43 @@ class PktCtx:
 
         return AnalyzerFrame('dwt', self.start_time, self.end_time, {'val': data_str })
 
+    def ext_process_data(self, frame):
+        self.end_time = frame.end_time
+        data_str = ' {0:08X}'.format(self.pdata)
+        return AnalyzerFrame('ext', self.start_time, self.end_time, {'val': data_str })
+
+    def local_timestamp(self, frame):
+        self.end_time = frame.end_time
+        data_str = 'Local TS {0:d}'.format(self.pdata)
+        if self.pcode == 0:
+            data_str += ' synchronous'
+        elif self.pcode == 1:
+            data_str += ' delayed'
+        elif self.pcode == 2:
+            data_str += ' delayed-generated'
+        elif self.pcode == 3:
+            data_str += ' delayed-relative'
+        else:
+            data_str += ' UNKNOWN'
+        return AnalyzerFrame('console', self.start_time, self.end_time, {'val': data_str })
+
+    def global_timestamp1(self, frame):
+        self.end_time = frame.end_time
+        data_str = 'Global TS {0:d}'.format(self.pdata)
+        if (self.pcode & (1 << 5)):
+            data_str += ' ClkChk'
+        if (self.pcode & (1 << 6)):
+            data_str += ' Wrap'
+        return AnalyzerFrame('console', self.start_time, self.end_time, {'val': data_str })
+
+    def global_timestamp2(self, frame):
+        self.end_time = frame.end_time
+        data_str = 'Global TS Hi-order {0:d}'.format(self.pdata)
+        return AnalyzerFrame('console', self.start_time, self.end_time, {'val': data_str })
+
     def hdr(self, frame, db):
+        decoded = None
+
         if (db == ITMDWTPP_SYNC):
             # ignore and stay at HDR
             self.start_time = None
@@ -300,48 +344,70 @@ class PktCtx:
             size = 0
 
             if source == ITMDWTPP_TYPE_PROTOCOL:
-                # TODO: We need to skip continuation bytes until C==0 when parsing
                 if db & ITMDWTPP_PROTOCOL_EXTENSION:
                     # EX[2:0] in bits 4..6 with C in bit 7
                     # remaining bits 3..31 in option successive bytes
                     # According to ARMv7-M D4.2.6 the extension information
                     # *only* to provide additional information for decoding
                     # instrumentation packets.
-                    if (db & ITMDWTPP_SOURCE_SELECTION):
-                        dwt_extension = db
+                    if (db & (1 << 7)):
+                        # (C)ontinuation
+                        self.fsm = TPIU_FSM.EXT
+                        self.pdata = ((db >> 4) & 0x7)
+                        # We track byte number in self.size
                     else:
-                        # Single byte SH==0 used to provide page for
-                        # subsequent instrumentation packets:
-                        self.ipage = ((db & ITMDWTPP_PROTOCOL_EXT_ITM_PAGE_MASK) >> ITMDWTPP_PROTOCOL_EXT_ITM_PAGE_SHIFT)
-                        # The page is cleared back to 0 by a synchronisation packet
+                        # Single byte: check SH:
+                        if (db & ITMDWTPP_SOURCE_SELECTION):
+                            # Undefined, so ignore:
+                            self.pdata = 0
+                        else:
+                            # Stimulus port page number for
+                            # subsequent instrumentation packets:
+                            self.ipage = ((db & ITMDWTPP_PROTOCOL_EXT_ITM_PAGE_MASK) >> ITMDWTPP_PROTOCOL_EXT_ITM_PAGE_SHIFT)
+                            # The page is cleared back to 0 by a synchronisation packet
+                        # Stay at HDR
                 else:
                     if db & ITMDWTPP_SOURCE_SELECTION:
-                        if (db & 0x94) == 0x94:
-                            # 0b10T10100
-                            # T = Global timestamp packet type
-
-
-                            global_timestamp = db
+                        self.pdata = 0
+                        self.pcode = 0
+                        if (db == 0x94):
+                            # GTS1 header is 0x94
+                            self.fsm = TPIU_FSM.GTS1
+                        elif (db == 0xB4):
+                            # GTS2 header is 0xB4
+                            self.fsm = TPIU_FSM.GTS2
                         else:
-                            reserved = db
+                            data_str = 'Global TimeStamp Decode {0:02X}'.format(db)
+                            decoded = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
                     else:
+                        # TimeStamp 1..5-bytes
                         # 0bCDDD000
                         # DDD != 000 (encodes sync when C=0)
                         # DDD != 111 (encodes overflow when C=0)
-                        local_timestamp = db
-                        # TimeStamp 1..5-bytes
-                        #       | b7   | b6   | b5   | b4   | b3   | b2   | b1   | b0   |
-                        # byte0 |  C   | TC2  | TC1  | TC0  |  0   |  0   |  0   |  0   |
-                        # byte1 |  C   | TS6  | TS5  | TS4  | TS3  | TS2  | TS1  | TS0  |
-                        # byte2 |  C   | TS13 | TS12 | TS11 | TS10 | TS9  | TS8  | TS7  |
-                        # byte3 |  C   | TS20 | TS19 | TS18 | TS17 | TS16 | TS15 | TS14 |
-                        # byte4 |  0   | TS27 | TS26 | TS25 | TS24 | TS23 | TS22 | TS21 |
-                        #
-                        # TC encoding depends on number of bytes of timestamp output
-                        # 1-byte (byte0 C==0) : TC==0 Reserved : TC==7 Overflow ITM : else TimeStamp emitted synchronous to ITM data
-                        # 2- or more bytes : TC==0..3 Reserved : TC==4 Timestamp synchronous to ITM data : TC==5 Timestamp delayed to ITM : TC==6 Packet delayed : TC==7 Packet and timestamp delayed
+                        # Those special cases are caught explicitly above:
 
-                self.pcode = 0 # just a holder to keep Python happy
+                        if (db & (1 << 7)):
+                            # (C)ontinuation : marks 2-..5-bytes timestamp
+                            #
+                            #       | b7   | b6   | b5   | b4   | b3   | b2   | b1   | b0   |
+                            # byte0 |  C   | TC2  | TC1  | TC0  |  0   |  0   |  0   |  0   |
+                            # byte1 |  C   | TS6  | TS5  | TS4  | TS3  | TS2  | TS1  | TS0  |
+                            # byte2 |  C   | TS13 | TS12 | TS11 | TS10 | TS9  | TS8  | TS7  |
+                            # byte3 |  C   | TS20 | TS19 | TS18 | TS17 | TS16 | TS15 | TS14 |
+                            # byte4 |  0   | TS27 | TS26 | TS25 | TS24 | TS23 | TS22 | TS21 |
+                            #
+                            # TC encoding depends on number of bytes of timestamp output
+                            # 1-byte (byte0 C==0) : TC==0 Reserved : TC==7 Overflow ITM : else TimeStamp emitted synchronous to ITM data
+                            # 2- or more bytes : TC==0..3 Reserved : TC==4 Timestamp synchronous to ITM data : TC==5 Timestamp delayed to ITM : TC==6 Packet delayed : TC==7 Packet and timestamp delayed
+                            self.fsm = TPIU_FSM.LTS
+                            self.pcode = ((db >> 4) & 0x7) # Timestamp Control
+                            self.pdata = 0
+                        else:
+                            # Single byte local timestamp
+                            self.pcode = 0 # timestamp emitted synchronous to ITM data
+                            self.pdata = ((db >> 4) & 0x7) # will be TimeStamp value of 1..6
+                            decoded = self.locat_timestamp(frame)
+                            # Stay at HDR
             else: # SWIT : Software Source
                 if source == ITMDWTPP_TYPE_SOURCE1:
                     size = 1
@@ -369,7 +435,7 @@ class PktCtx:
                     self.pdata = 0;
                 self.start_time = frame.start_time
             self.size = size
-        return None
+        return decoded
 
     def itm1(self, frame, db):
         decoded = None
@@ -447,6 +513,82 @@ class PktCtx:
         self.fsm = TPIU_FSM.HDR
         return decoded
 
+    def ext(self, frame, db):
+        decoded = None
+        continuation = False
+        if self.size == 0:
+            self.pdata |= ((db & 0x7F) << 3)
+            continuation = (db & (1 << 7))
+        elif self.size == 1:
+            self.pdata |= ((db & 0x7F) << 10)
+            continuation = (db & (1 << 7))
+        elif self.size == 2:
+            self.pdata |= ((db & 0x7F) << 17)
+            continuation = (db & (1 << 7))
+        else: # size == 3
+            self.pdata |= (db << 24)
+            continuation = False
+
+        if continuation:
+            self.size += 1
+        else:
+            decoded = self.ext_process_data(frame)
+            self.fsm = TPIU_FSM.HDR
+
+        return decoded
+
+    def lts(self, frame, db):
+        decoded = None
+        self.pdata |= ((db & 0x7F) << (self.size * 7))
+        if (db & (1 << 7)):
+            self.size += 1
+            if (self.size == 4):
+                data_str = 'Local TimeStamp Continuation'
+                decoded = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+                self.fsm = TPIU_FSM.HDR
+        else:
+            decoded = self.local_timestamp(frame)
+            self.fsm = TPIU_FSM.HDR
+
+        return decoded
+
+    def gts1(self, frame, db):
+        decoded = None
+
+        if (self.size != 3):
+            self.pdata |= ((db & 0x7F) << (self.size * 7))
+        else: # bits 21..25
+            self.pdata |= ((db & 0x1F) << (self.size * 7))
+            self.pcode = (db & 0x60) # Wrap and ClkCh flags
+        if (db & (1 << 7)):
+            self.size += 1
+            if (self.size == 4):
+                data_str = 'Global TimeStamp1 Continuation'
+                decoded = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+                self.fsm = TPIU_FSM.HDR
+        else:
+            decoded = self.global_timestamp1(frame)
+            self.fsm = TPIU_FSM.HDR
+
+        return decoded
+
+    def gts2(self, frame, db):
+        # Hi-order bits for most recently transmitted GTS1 packet
+        decoded = None
+        self.pdata |= ((db & 0x7F) << (self.size * 7))
+        if (db & (1 << 7)):
+            self.size += 1
+            # may be 5-byte (bits 26..47) or 7-byte (bits 26..63) packet
+            if (self.size == 6):
+                data_str = 'Global TimeStamp2 Continuation'
+                decoded = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+                self.fsm = TPIU_FSM.HDR
+        else:
+            decoded = self.global_timestamp2(frame)
+            self.fsm = TPIU_FSM.HDR
+
+        return decoded
+
     def run(self, frame):
         switcher = {
             TPIU_FSM.HDR: self.hdr,
@@ -457,7 +599,11 @@ class PktCtx:
             TPIU_FSM.DWT1: self.dwt1,
             TPIU_FSM.DWT2: self.dwt2,
             TPIU_FSM.DWT3: self.dwt3,
-            TPIU_FSM.DWT4: self.dwt4
+            TPIU_FSM.DWT4: self.dwt4,
+            TPIU_FSM.EXT: self.ext,
+            TPIU_FSM.LTS: self.lts,
+            TPIU_FSM.GTS1: self.gts1,
+            TPIU_FSM.GTS2: self.gts2
         }
         func = switcher.get(self.fsm)
         return func(frame, frame.data['data'][0])
@@ -483,6 +629,9 @@ class TPIU(HighLevelAnalyzer):
         },
         'dwt': {
             'format': 'DWT: {{data.val}}'
+        },
+        'ext': {
+            'format': 'EXT: {{data.val}}'
         }
     }
 
