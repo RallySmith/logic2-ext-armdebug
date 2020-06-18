@@ -198,12 +198,9 @@ class PktCtx:
             if paddr != self.portaddr:
                 return None
             else:
-                #data_str = 'DBG:Instrumentation: {0:d}'.format(paddr) # TODO:REMOVE
-                #return AnalyzerFrame('console', self.start_time, self.end_time, {'val': data_str }) # TODO:REMOVE
                 if self.instrumentation == None:
                     self.instrumentation = Instrumentation()
                 return self.instrumentation.packet(self.start_time, frame.end_time, self.size, self.pdata)
-
 
         self.end_time = frame.end_time
 
