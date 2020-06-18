@@ -74,9 +74,9 @@ ITMDWTPP_SOURCE_MASK = (0x1F << ITMDWTPP_SOURCE_SHIFT)
 ITMDWTPP_PROTOCOL_EXT_ITM_PAGE_SHIFT = (4)
 ITMDWTPP_PROTOCOL_EXT_ITM_PAGE_MASK = (0x7 << ITMDWTPP_PROTOCOL_EXT_ITM_PAGE_SHIFT)
 
-DWT_ID_EVENT_COUNTER_WRAP = (0)
-DWT_ID_EXCEPTION = (1)
-DWT_ID_PC_SAMPLE = (2)
+DWT_ID_EVENT_COUNTER_WRAP = 0
+DWT_ID_EXCEPTION = 1
+DWT_ID_PC_SAMPLE = 2
 # 3..7 reserved
 # 8..23 Data tracing
 
@@ -256,7 +256,7 @@ class PktCtx:
             elif fn == 3:
                 fn_reason = 'RESUMED'
             data.str += ' EXC={0:d) {1:s}'.format(exception_number, fn_reason)
-        elif self.pcde == DWT_ID_EVENT_COUNTER_WRAP:
+        elif self.pcode == DWT_ID_EVENT_COUNTER_WRAP:
             # 1-byte with bitmask of counter overflow marker bits
             #  b7      b6      b5      b4      b3      b2      b1     b0
             # |   0   |   0   |  Cyc  | Fold  |  LSU  | Sleep |  Exc |  CPI  |
@@ -331,11 +331,11 @@ class PktCtx:
 
         if (db == ITMDWTPP_SYNC):
             # ignore and stay at HDR
-            self.start_time = None
+            self.start_time = 0
             self.ipage = 0
         elif (db == ITMDWTPP_OVERFLOW):
             # ignore and stay at HDR
-            self.start_time = None
+            self.start_time = 0
         else:
             source = (db & ITMDWTPP_TYPE_MASK)
             size = 0
@@ -499,7 +499,7 @@ class PktCtx:
             decoded = self.dwt_process_data(frame)
             self.fsm = TPIU_FSM.HDR
         else:
-            self.fsm = TPIU_FSM.DWT
+            self.fsm = TPIU_FSM.DWT4
         return decoded
 
     def dwt4(self, frame, db):
