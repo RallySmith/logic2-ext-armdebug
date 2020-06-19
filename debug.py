@@ -685,6 +685,7 @@ class TPIUCtx:
             lsbits = self.packet[15][0]
 
             stream_start_time = self.start_time
+            pending_nextstream = None
 
             for idx in range(15):
                 pb = self.packet[idx][0]
@@ -692,20 +693,29 @@ class TPIUCtx:
                 bend = self.packet[idx][2]
                 if idx & 1:
                     databytes.append( (pb, bstart, bend) )
+
+                    if pending_nextstream != None:
+                        nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
+                        if nf != None:
+                            if isinstance(nf, list):
+                                frames += nf
+                            else:
+                                frames.append(nf)
+                        self.stream_active = pending_nextstream
+                        pending_nextstream = None
+                        databytes.clear()
+
                 else:
                     #even
                     if pb & 1:
                         nextstream = (pb >> 1)
                         if nextstream != self.stream_active:
-                            nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
-                            if nf != None:
-                                if isinstance(nf, list):
-                                    frames += nf
-                                else:
-                                    frames.append(nf)
-                            self.stream_active = nextstream
                             stream_start_time = self.packet[idx][1]
-                            databytes.clear()
+                            if nextstream == 0:
+                                # IDLE
+                                pending_nextstream = nextstream
+                            else:
+                                self.stream_active = nextstream
                     else:
                         fb = (pb | ((lsbits >> (idx >> 1)) & 1))
                         databytes.append( (fb, bstart, bend) )
@@ -725,17 +735,6 @@ class TPIUCtx:
 
 #------------------------------------------------------------------------------
 # TPIU packet decoding
-
-
-# byte   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
-#       SI  D  d  D  d  D  d  D  d  D  d  D SI  D  - LL
-# UART: 03 4E 10 10 8E 00 00 00 00 01 4E 01 01 6E 00 6C         # So byte 15 0x6C is 0b01101100 which is LSB first 0 0 1 1 0 1 1 0
-#        0     0     1     1     0     1     1     0
-#       <-------------stream 1------------------> <-stream 0
-#  ITM:    4E 10 10 8F 00 01 00 00 01 4F 01    6E
-#          \______/ \____________/ \___/ \_    _/
-#          watch    watch          swit  swit
-#          addr     data           port0 port0
 
 class TPIU(HighLevelAnalyzer):
     # Consider options for:
