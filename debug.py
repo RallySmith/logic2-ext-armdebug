@@ -29,11 +29,18 @@ class TPIU_FSM(IntEnum):
     GTS1 = 11
     GTS2 = 12
 
+# ITM/DWT decoding
 class DecodeStyle(IntEnum):
     All = 0 # decode all data : ignore port# setting
     Port = 1 # decode specific port# only
     Console = 2 # decode specific port# as ASCII console
     Instrumentation = 3 # decode specific port# as eCosPro style multi-frame O/S instrumentation
+
+# TPIU decoding
+class DecodeStyleTPIU(IntEnum):
+    All = 0 # decode all data : ignore stream# setting
+    Stream = 1 # decode specific stream# only
+    Saleae = 2 # internal decode to Saleae frames
 
 # ITM
 # Synchronisation:
@@ -93,7 +100,7 @@ DWT_ID_PC_SAMPLE = 2
 
 class Instrumentation:
     def __init__(self):
-        self.start_time = 0
+        self.start_time = None
         self.end_time = 0
         self.sequence = 256
         self.lastseq = 0
@@ -108,7 +115,10 @@ class Instrumentation:
             nf = None
             if self.sequence != snum:
                 data_str = 'Seq# mismatch: saw {0:02X} expected {1:02X}'.format(snum, self.sequence)
-                nf = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+                use_start = self.start_time
+                if use_start == None:
+                    use_start = start_time
+                nf = AnalyzerFrame('err', use_start, end_time, {'val': data_str })
             else:
                 data_str = ''
                 if snum != ((self.lastseq + 1) & 0xFF):
@@ -129,7 +139,10 @@ class Instrumentation:
             if self.sequence != 256:
                 # If active (non-tail) record then return "error frame" for output
                 data_str = 'Partial record for seq# {0:02X}'.format(self.sequence)
-                nf = AnalyzerFrame('err', self.start_time, self.end_time, {'val': data_str })
+                use_start = self.start_time
+                if use_start == None:
+                    use_start = start_time
+                nf = AnalyzerFrame('err', use_start, self.end_time, {'val': data_str })
             # new record:
             self.num_words = 0
             self.sequence = (pdata & 0xFF)
@@ -148,14 +161,17 @@ class Instrumentation:
             # Unexpected size : return error frame
             data_str = 'Unexpected field size {0:d}'.format(size)
             self.sequence = 256
-            return AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+            use_start = self.start_time
+            if use_start == None:
+                use_start = start_time
+            return AnalyzerFrame('err', use_start, end_time, {'val': data_str })
 
 #------------------------------------------------------------------------------
 
 class PktCtx:
     def __init__(self, start_time, dstyle, portaddr):
         self.start_time = start_time
-        self.end_time = None
+        self.end_time = 0
         self.portaddr = portaddr
         self.fsm = TPIU_FSM.HDR
         self.ipage = 0
@@ -233,7 +249,7 @@ class PktCtx:
                     # Reserved
                     data_str += ' IDLE:{0:02X}'.format(self.pdata & 0xFF)
             elif self.size == 4:
-                data.str += ' PC={0:08X}'.format(self.pdata)
+                data_str += ' PC={0:08X}'.format(self.pdata)
             else:
                 data_str += ' PC=Unrecognised'
         elif self.pcode == DWT_ID_EXCEPTION:
@@ -255,7 +271,7 @@ class PktCtx:
                 fn_reason = 'EXITED'
             elif fn == 3:
                 fn_reason = 'RESUMED'
-            data.str += ' EXC={0:d) {1:s}'.format(exception_number, fn_reason)
+            data_str += ' EXC {0:d} {1:s}'.format(exception_number, fn_reason)
         elif self.pcode == DWT_ID_EVENT_COUNTER_WRAP:
             # 1-byte with bitmask of counter overflow marker bits
             #  b7      b6      b5      b4      b3      b2      b1     b0
@@ -267,7 +283,7 @@ class PktCtx:
             # b2 Sleep  SLEEPCNT profiling counter
             # b1 Exc    EXCCNT   profiling counter
             # b0 CPI    CPICNT   profiling counter
-            data.str += ' WRAP={0:02X}'.format(self.pdata & 0xFF)
+            data_str += ' WRAP {0:02X}'.format(self.pdata & 0xFF)
         else:
             if self.pcode < 8:
                 data_str += ' RESERVED'
@@ -331,11 +347,11 @@ class PktCtx:
 
         if (db == ITMDWTPP_SYNC):
             # ignore and stay at HDR
-            self.start_time = 0
+            self.start_time = None
             self.ipage = 0
         elif (db == ITMDWTPP_OVERFLOW):
             # ignore and stay at HDR
-            self.start_time = 0
+            self.start_time = None
         else:
             source = (db & ITMDWTPP_TYPE_MASK)
             size = 0
@@ -375,7 +391,10 @@ class PktCtx:
                             self.fsm = TPIU_FSM.GTS2
                         else:
                             data_str = 'Global TimeStamp Decode {0:02X}'.format(db)
-                            decoded = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+                            use_start = self.start_time
+                            if use_start == None:
+                                use_start = frame.start_time
+                            decoded = AnalyzerFrame('err', use_start, frame.end_time, {'val': data_str })
                     else:
                         # TimeStamp 1..5-bytes
                         # 0bCDDD000
@@ -403,7 +422,7 @@ class PktCtx:
                             # Single byte local timestamp
                             self.pcode = 0 # timestamp emitted synchronous to ITM data
                             self.pdata = ((db >> 4) & 0x7) # will be TimeStamp value of 1..6
-                            decoded = self.locat_timestamp(frame)
+                            decoded = self.local_timestamp(frame)
                             # Stay at HDR
             else: # SWIT : Software Source
                 if source == ITMDWTPP_TYPE_SOURCE1:
@@ -606,13 +625,174 @@ class PktCtx:
         return func(frame, frame.data['data'][0])
 
 #------------------------------------------------------------------------------
+
+class TPIUCtx:
+    # ARM TPIU exports 16-byte frames:
+    # - even bytes contain stream id if bit0 set; otherwise data
+    # - odd bytes are always data
+    # - byte15 is the LSB of the even bytes
+
+    def __init__(self, tpdstyle, stream_match):
+        self.start_time = None
+        self.dstyle = tpdstyle
+        self.stream_match = stream_match
+        self.stream_active = 0
+        self.bidx = 0
+        self.packet = []
+
+    def dump_stream(self, start_time, end_time, streamid, databytes):
+        if self.dstyle is DecodeStyleTPIU.Stream:
+            if streamid != self.stream_match:
+                return None
+
+        if len(databytes) != 0:
+            if self.dstyle is DecodeStyleTPIU.Saleae:
+                if streamid != self.stream_match:
+                    return None
+                # We return Analyzer frames for each byte to be decoded by our higher layer:
+                frames = []
+                for idx in range(len(databytes)):
+                    raw_byte = databytes[idx][0]
+                    byte_start = databytes[idx][1]
+                    byte_end = databytes[idx][2]
+                    nf = AnalyzerFrame('data', byte_start, byte_end, { 'data': bytes( [raw_byte] ) } )
+                    frames.append(nf)
+                return frames
+
+            data_str = 'Stream{0:d}:'.format(streamid)
+            for idx in range(len(databytes)):
+                data_str += ' {0:02X}'.format(databytes[idx][0])
+            return AnalyzerFrame('tpiu', start_time, end_time, {'val': data_str })
+
+        return None
+
+    def process_byte(self, frame, db):
+        frames = []
+
+        if self.bidx == 0:
+            self.start_time = frame.start_time
+            self.packet.clear()
+
+        # We need to record the start_time for each data byte supplied
+        # so that we can resync into packets by the higher level
+        # decoder:
+        self.packet.append( (db, frame.start_time, frame.end_time) )
+
+        self.bidx += 1
+        if self.bidx == 16:
+            # Process data bytes:
+            databytes = []
+            lsbits = self.packet[15][0]
+
+            stream_start_time = self.start_time
+
+            for idx in range(15):
+                pb = self.packet[idx][0]
+                bstart = self.packet[idx][1]
+                bend = self.packet[idx][2]
+                if idx & 1:
+                    databytes.append( (pb, bstart, bend) )
+                else:
+                    #even
+                    if pb & 1:
+                        nextstream = (pb >> 1)
+                        if nextstream != self.stream_active:
+                            nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
+                            if nf != None:
+                                if isinstance(nf, list):
+                                    frames += nf
+                                else:
+                                    frames.append(nf)
+                            self.stream_active = nextstream
+                            stream_start_time = self.packet[idx][1]
+                            databytes.clear()
+                    else:
+                        fb = (pb | ((lsbits >> (idx >> 1)) & 1))
+                        databytes.append( (fb, bstart, bend) )
+
+            if len(databytes):
+                nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
+                if nf != None:
+                    if isinstance(nf, list):
+                        frames += nf
+                    else:
+                        frames.append(nf)
+
+            # Prepare for next packet:
+            self.bidx = 0
+
+        return frames
+
+#------------------------------------------------------------------------------
 # TPIU packet decoding
 
+
+# byte   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+#       SI  D  d  D  d  D  d  D  d  D  d  D SI  D  - LL
+# UART: 03 4E 10 10 8E 00 00 00 00 01 4E 01 01 6E 00 6C         # So byte 15 0x6C is 0b01101100 which is LSB first 0 0 1 1 0 1 1 0
+#        0     0     1     1     0     1     1     0
+#       <-------------stream 1------------------> <-stream 0
+#  ITM:    4E 10 10 8F 00 01 00 00 01 4F 01    6E
+#          \______/ \____________/ \___/ \_    _/
+#          watch    watch          swit  swit
+#          addr     data           port0 port0
+
 class TPIU(HighLevelAnalyzer):
+    # Consider options for:
+    # - all streams
+    # - specific stream
+    # - allow ETM decoding
+
+    tpiu_decode_style = ChoicesSetting(choices=('All', 'Stream'))
+    stream = NumberSetting(min_value=1, max_value=127)
+    # Stream 0 : idle : ignored
+    # Streams 1..119 : normal debug streams
+    # Streams 120..127 : reserved
+
+    result_types = {
+        'tpiu': {
+            'format': 'TPIU: {{data.val}}'
+        }
+    }
+
+    def __init__(self):
+        self.ctx = None
+        pass
+
+    def decode(self, frame: AnalyzerFrame):
+        # frame.type should always be 'data'
+        # frame.data['data'] will be a bytes object
+        # frame.data['error'] will be set if there was an error
+
+        # IMPLEMENT: Check for frame.data['error'] string and skip
+        # decoding if invalid source data
+
+        # For AsyncSerial we expect the 'data' field to contain one byte
+
+        if self.ctx == None:
+            tpdstyle = DecodeStyleTPIU.All # default
+            if self.tpiu_decode_style == 'Stream':
+                tpdstyle = DecodeStyleTPIU.Stream
+            self.ctx = TPIUCtx(tpdstyle, self.stream)
+
+        # Process bytes:
+        nf = self.ctx.process_byte(frame, frame.data['data'][0])
+        if nf is None:
+            return
+
+        return nf
+
+#------------------------------------------------------------------------------
+# ITM and DWT packet protocol  decoding
+
+class ITMDWT(HighLevelAnalyzer):
     #some_string = StringSetting()
     decode_style = ChoicesSetting(choices=('All', 'Port', 'Console', 'Instrumentation'))
     # We can have 8 pages of 32-ports in each page
     port = NumberSetting(min_value=0, max_value=255)
+    # We may need to de-reference a TPIO stream:
+    TPIU_stream = NumberSetting(min_value=0, max_value=127)
+    # NOTE: 0 indicates NO TPIU encoding
 
     result_types = {
         'console': {
@@ -633,24 +813,11 @@ class TPIU(HighLevelAnalyzer):
     }
 
     def __init__(self):
-        '''
-        Initialize HLA.
-
-        Settings can be accessed using the same name used above.
-        '''
-
-        self.no_match_start_time = None
-        self.no_match_end_time = None
         self.ctx = None
+        self.tpiu = None
         pass
 
     def decode(self, frame: AnalyzerFrame):
-        '''
-        Process a frame from the input analyzer, and optionally return a single `AnalyzerFrame` or a list of `AnalyzerFrame`s.
-
-        The type and data values in `frame` will depend on the input analyzer.
-        '''
-
         # frame.type should always be 'data'
         # frame.data['data'] will be a bytes object
         # frame.data['error'] will be set if there was an error
@@ -671,7 +838,27 @@ class TPIU(HighLevelAnalyzer):
             self.ctx = PktCtx(frame.start_time, dstyle, self.port)
 
         # Progress FSM:
-        nf = self.ctx.run(frame)
+        nf = None
+
+        # We may need to unwrap from a TPIU stream encoding:
+        if self.TPIU_stream != 0:
+            if self.tpiu == None:
+                self.tpiu = TPIUCtx(DecodeStyleTPIU.Saleae, self.TPIU_stream)
+            tframes = self.tpiu.process_byte(frame, frame.data['data'][0])
+            if tframes is None:
+                nf = None
+            else:
+                if isinstance(tframes, list):
+                    nf = []
+                    for idx in range(len(tframes)):
+                        iframe = self.ctx.run(tframes[idx])
+                        if iframe != None:
+                            nf.append(iframe)
+                else:
+                    nf = None
+        else:
+            nf = self.ctx.run(frame)
+
         if nf is None:
             #if self.no_match_start_time is None:
             #    self.no_match_start_time = frame.start_time

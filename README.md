@@ -32,6 +32,14 @@ information.
 
 ## Configuration
 
+Depending on the underlying hardware TPIU configuration we may get the
+`ITMDWT` data as an unwrapped stream, in which case the `Stream`
+option should be 0 (normally used to identify the reserved, unused,
+IDLE stream) to indicate that TPIU packet unwrapping is **NOT**
+needed. If the ITM/DWT data is wrapped in a TPIU packet stream
+encoding then the stream ID associated with the ITM/DWT data should be
+configured.
+
 ### `All`
 
 When the `Decode Style` selected is `All` then the `Port` field is

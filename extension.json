@@ -5,9 +5,13 @@
   "version": "0.0.3",
   "description": "ARM Cortex TPIU ITM/DWT utilities",
   "extensions": {
-  "TPIU": {
+    "TPIU": {
       "type": "HighLevelAnalyzer",
       "entryPoint": "debug.TPIU"
+    },
+    "ITMDWT": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "debug.ITMDWT"
     }
   }
 }
