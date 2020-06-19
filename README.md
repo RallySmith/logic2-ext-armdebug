@@ -2,11 +2,13 @@
 
 Simple ARM/Cortex debug/trace HLA extension for Saleae Logic2.
 
+Provides `TPIU` and `ITMDWT` analysers.
+
 Since the Saleae HLA extension world does not allow for nesting of HLA
 extensions on top of an existing extension (only on top of a base
 supported analyser) this extension provides a `Decode Style` choice to
-allow for some control over how and what parts of the TPIU ITM stream
-are decoded.
+allow for some control over how and what parts of the TPIU and ITM/DWT
+streams are decoded.
 
 This means the user can instantiate multiple copies of the extension
 each showing specific aspects of the stream as required. The following
@@ -30,7 +32,7 @@ As a workaround extended the choice of `Decode Style` options exposed
 by this analyser could make it easier to highlight specific pieces of
 information.
 
-## Configuration
+## ITMDWT Configuration
 
 Depending on the underlying hardware TPIU configuration we may get the
 `ITMDWT` data as an unwrapped stream, in which case the `Stream`
@@ -44,7 +46,7 @@ configured.
 
 When the `Decode Style` selected is `All` then the `Port` field is
 **ignored** and can be any value. For example the following will
-display raw decoding of all the TPIU packets:
+display raw decoding of all the ITM/DWT packets:
 
 ![config_raw](docs/config_tpiu_all.png "configure All raw")
 
