@@ -560,7 +560,7 @@ class PktCtx:
             self.size += 1
             if (self.size == 4):
                 data_str = 'Local TimeStamp Continuation'
-                decoded = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+                decoded = AnalyzerFrame('err', self.start_time, frame.end_time, {'val': data_str })
                 self.fsm = TPIU_FSM.HDR
         else:
             decoded = self.local_timestamp(frame)
@@ -580,7 +580,7 @@ class PktCtx:
             self.size += 1
             if (self.size == 4):
                 data_str = 'Global TimeStamp1 Continuation'
-                decoded = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+                decoded = AnalyzerFrame('err', self.start_time, frame.end_time, {'val': data_str })
                 self.fsm = TPIU_FSM.HDR
         else:
             decoded = self.global_timestamp1(frame)
@@ -597,7 +597,7 @@ class PktCtx:
             # may be 5-byte (bits 26..47) or 7-byte (bits 26..63) packet
             if (self.size == 6):
                 data_str = 'Global TimeStamp2 Continuation'
-                decoded = AnalyzerFrame('err', self.start_time, end_time, {'val': data_str })
+                decoded = AnalyzerFrame('err', self.start_time, frame.end_time, {'val': data_str })
                 self.fsm = TPIU_FSM.HDR
         else:
             decoded = self.global_timestamp2(frame)
@@ -625,13 +625,23 @@ class PktCtx:
         return func(frame, frame.data['data'][0])
 
 #------------------------------------------------------------------------------
+# ARM TPIU exports 16-byte frames:
+# See ARM DDI 0314H section 8.12
+# - even bytes contain stream id if bit0 set; otherwise data
+# - odd bytes are always data
+# - byte15 is the LSB of the even bytes
+#
+# See ARM DDI 0314H 8.12.1
+#  When a trace source is changed the appropriate flag bit, F, is set
+#  (1 = ID, 0 - Data on the following byte). The second byte is always
+#  data and the corresponding bit at the end of the sequence (bits
+#  A-J) indicates if this second byte correspondds to the new ID (F
+#  bit clear) or the previous ID (F bit set).
+
+# TODO:ISSUE: The SWO captured TPIU stream from a STM32F429I-DISCO
+# board seems to start half-way through a 16-byte packet.
 
 class TPIUCtx:
-    # ARM TPIU exports 16-byte frames:
-    # - even bytes contain stream id if bit0 set; otherwise data
-    # - odd bytes are always data
-    # - byte15 is the LSB of the even bytes
-
     def __init__(self, tpdstyle, stream_match):
         self.start_time = None
         self.dstyle = tpdstyle
@@ -673,6 +683,12 @@ class TPIUCtx:
             self.start_time = frame.start_time
             self.packet.clear()
 
+        # TODO: Do we need to check for synchronisation packet 0x7FFFFFFF
+        # - or halfword sync 0x7FFF?
+
+        # TODO:IMPLEMENT: ARM IHI 0029E D4.2.7
+        # Use of two consecutive source IDs to indicate start of a packet
+
         # We need to record the start_time for each data byte supplied
         # so that we can resync into packets by the higher level
         # decoder:
@@ -708,13 +724,28 @@ class TPIUCtx:
                 else:
                     #even
                     if pb & 1:
+                        # ARM DDI 0314H 8.12.1
+                        # The byte15 flag byte indicates whether the next odd
+                        # byte is for the previous stream or the new stream
+                        #
+                        # ARM IHI 0029E D4.2.6
+                        # We should expect to see the active stream ID repeated
+                        # (~10-frames) if we have continuous data from a single
+                        # stream source.
                         nextstream = (pb >> 1)
                         if nextstream != self.stream_active:
                             stream_start_time = self.packet[idx][1]
-                            if nextstream == 0:
-                                # IDLE
+                            if ((lsbits >> (idx >> 1)) & 1):
+                                # Next byte for previous stream:
                                 pending_nextstream = nextstream
                             else:
+                                # Common with above:
+                                nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
+                                if nf != None:
+                                    if isinstance(nf, list):
+                                        frames += nf
+                                    else:
+                                        frames.append(nf)
                                 self.stream_active = nextstream
                     else:
                         fb = (pb | ((lsbits >> (idx >> 1)) & 1))
@@ -743,10 +774,15 @@ class TPIU(HighLevelAnalyzer):
     # - allow ETM decoding
 
     tpiu_decode_style = ChoicesSetting(choices=('All', 'Stream'))
-    stream = NumberSetting(min_value=1, max_value=127)
-    # Stream 0 : idle : ignored
-    # Streams 1..119 : normal debug streams
-    # Streams 120..127 : reserved
+    stream = NumberSetting(min_value=1, max_value=126)
+    # Stream  0x00       : idle : ignored
+    # Streams 0x01..0x6F : normal debug streams
+    # Streams 0x70..0x7A : reserved
+    # stream  0x7B       : flush response
+    # stream  0x7C       : reserved
+    # Stream  0x7D       : trigger event
+    # Stream  0x7E       : reserved
+    # Stream  0x7F       : reserved : never used since affects sync detection
 
     result_types = {
         'tpiu': {
