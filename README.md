@@ -32,13 +32,21 @@ As a workaround extended the choice of `Decode Style` options exposed
 by this analyser could make it easier to highlight specific pieces of
 information.
 
+## TPIU Configuration
+
+It has been seen on some platforms that the SWO output of the TPIU
+formatted stream can actually start part-way through a 16-byte TPIU
+packet; without any method of subsequent resynchronisation. An
+`Offset` setting is available (`TPIU_Offset` in the layered `ITMDWT`
+decoder) to allow manual resynchronisation of the TPIU packet stream.
+
 ## ITMDWT Configuration
 
 Depending on the underlying hardware TPIU configuration we may get the
-`ITMDWT` data as an unwrapped stream, in which case the `Stream`
-option should be 0 (normally used to identify the reserved, unused,
-IDLE stream) to indicate that TPIU packet unwrapping is **NOT**
-needed. If the ITM/DWT data is wrapped in a TPIU packet stream
+`ITMDWT` data as an unwrapped stream (BYPASS mode), in which case the
+`Stream` option should be 0 (normally used to identify the reserved,
+unused, IDLE stream) to indicate that TPIU packet unwrapping is
+**NOT** needed. If the ITM/DWT data is wrapped in a TPIU packet stream
 encoding then the stream ID associated with the ITM/DWT data should be
 configured.
 

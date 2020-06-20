@@ -642,13 +642,17 @@ class PktCtx:
 # board seems to start half-way through a 16-byte packet.
 
 class TPIUCtx:
-    def __init__(self, tpdstyle, stream_match):
+    def __init__(self, tpdstyle, stream_match, offset):
         self.start_time = None
         self.dstyle = tpdstyle
         self.stream_match = stream_match
         self.stream_active = 0
-        self.bidx = 0
+        self.bidx = int(offset)
         self.packet = []
+        # Create dummy bytes for missing data:
+        if self.bidx:
+            for idx in range(self.bidx):
+                self.packet.append( (0x00, None, None) )
 
     def dump_stream(self, start_time, end_time, streamid, databytes):
         if self.dstyle is DecodeStyleTPIU.Stream:
@@ -665,13 +669,18 @@ class TPIUCtx:
                     raw_byte = databytes[idx][0]
                     byte_start = databytes[idx][1]
                     byte_end = databytes[idx][2]
-                    nf = AnalyzerFrame('data', byte_start, byte_end, { 'data': bytes( [raw_byte] ) } )
-                    frames.append(nf)
+                    if (byte_start != None) and (byte_end != None):
+                        nf = AnalyzerFrame('data', byte_start, byte_end, { 'data': bytes( [raw_byte] ) } )
+                        frames.append(nf)
                 return frames
 
             data_str = 'Stream{0:d}:'.format(streamid)
             for idx in range(len(databytes)):
-                data_str += ' {0:02X}'.format(databytes[idx][0])
+                raw_byte = databytes[idx][0]
+                byte_start = databytes[idx][1]
+                byte_end = databytes[idx][2]
+                if (byte_start != None) and (byte_end != None):
+                    data_str += ' {0:02X}'.format(raw_byte)
             return AnalyzerFrame('tpiu', start_time, end_time, {'val': data_str })
 
         return None
@@ -682,12 +691,6 @@ class TPIUCtx:
         if self.bidx == 0:
             self.start_time = frame.start_time
             self.packet.clear()
-
-        # TODO: Do we need to check for synchronisation packet 0x7FFFFFFF
-        # - or halfword sync 0x7FFF?
-
-        # TODO:IMPLEMENT: ARM IHI 0029E D4.2.7
-        # Use of two consecutive source IDs to indicate start of a packet
 
         # We need to record the start_time for each data byte supplied
         # so that we can resync into packets by the higher level
@@ -773,7 +776,10 @@ class TPIU(HighLevelAnalyzer):
     # - specific stream
     # - allow ETM decoding
 
+    # Decode style:
     tpiu_decode_style = ChoicesSetting(choices=('All', 'Stream'))
+
+    # Stream ID:
     stream = NumberSetting(min_value=1, max_value=126)
     # Stream  0x00       : idle : ignored
     # Streams 0x01..0x6F : normal debug streams
@@ -783,6 +789,11 @@ class TPIU(HighLevelAnalyzer):
     # Stream  0x7D       : trigger event
     # Stream  0x7E       : reserved
     # Stream  0x7F       : reserved : never used since affects sync detection
+
+    # Initial synchronisation:
+    offset = NumberSetting(min_value=0, max_value=15)
+    # Sometimes the capture may miss bytes of the first 16-byte aligned TPIU
+    # packet. This allows the decoder to be synchronised on the partial packet.
 
     result_types = {
         'tpiu': {
@@ -808,7 +819,7 @@ class TPIU(HighLevelAnalyzer):
             tpdstyle = DecodeStyleTPIU.All # default
             if self.tpiu_decode_style == 'Stream':
                 tpdstyle = DecodeStyleTPIU.Stream
-            self.ctx = TPIUCtx(tpdstyle, self.stream)
+            self.ctx = TPIUCtx(tpdstyle, self.stream, self.offset)
 
         # Process bytes:
         nf = self.ctx.process_byte(frame, frame.data['data'][0])
@@ -821,13 +832,18 @@ class TPIU(HighLevelAnalyzer):
 # ITM and DWT packet protocol  decoding
 
 class ITMDWT(HighLevelAnalyzer):
-    #some_string = StringSetting()
+    # Decode style:
     decode_style = ChoicesSetting(choices=('All', 'Port', 'Console', 'Instrumentation'))
+
     # We can have 8 pages of 32-ports in each page
     port = NumberSetting(min_value=0, max_value=255)
+
     # We may need to de-reference a TPIO stream:
     TPIU_stream = NumberSetting(min_value=0, max_value=127)
-    # NOTE: 0 indicates NO TPIU encoding
+    # NOTE: 0 indicates NO TPIU encoding (BYPASS mode)
+
+    # Initial synchronisation:
+    TPIU_offset = NumberSetting(min_value=0, max_value=15)
 
     result_types = {
         'console': {
@@ -878,7 +894,7 @@ class ITMDWT(HighLevelAnalyzer):
         # We may need to unwrap from a TPIU stream encoding:
         if self.TPIU_stream != 0:
             if self.tpiu == None:
-                self.tpiu = TPIUCtx(DecodeStyleTPIU.Saleae, self.TPIU_stream)
+                self.tpiu = TPIUCtx(DecodeStyleTPIU.Saleae, self.TPIU_stream, self.TPIU_offset)
             tframes = self.tpiu.process_byte(frame, frame.data['data'][0])
             if tframes is None:
                 nf = None
