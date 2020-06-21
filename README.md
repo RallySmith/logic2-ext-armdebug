@@ -32,6 +32,13 @@ As a workaround extended the choice of `Decode Style` options exposed
 by this analyser could make it easier to highlight specific pieces of
 information.
 
+The example Saleae capture file
+[SWO 8MHz TPIU packets](docs/SWO_8MHz_TPIU_offset12.sal)
+is a capture of a (non-Bypass) TPIU packet configuration with the
+ITM/DWT data encoded in TPIU stream **`1`**. The ITM data consists of
+console data on stimulus port **`31`** and O/S instrumentation packets
+on stimulus port **`24`**.
+
 ## TPIU Configuration
 
 It has been seen on some platforms that the SWO output of the TPIU
@@ -70,6 +77,13 @@ When the `Decode Style` configured is `Console` then ITM packet decode
 is provided for packets that match the configured trace port
 number. All other packets are ignored. The contents of matching trace
 port packets are treated as `ASCII`.
+
+To make it easier to track multi-character output from an application
+a single analyser frame is displayed for all printable characters upto
+newline (`0x0A`) or NUL (`0x00`) characters are seen in the console
+stream.
+
+![console_mc](docs/console_multichar.png "Grouped console characters")
 
 ### `Instrumentation`
 

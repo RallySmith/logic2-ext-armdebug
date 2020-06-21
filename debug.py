@@ -168,6 +168,28 @@ class Instrumentation:
 
 #------------------------------------------------------------------------------
 
+class ConsoleCtx:
+    def __init__(self, start_time):
+        self.start_time = start_time
+        self.ctext = ''
+
+    def cdata(self, frame, cc):
+        nf = None
+
+        if cc == 0x0A or cc == 0x00:
+            nf = AnalyzerFrame('console', self.start_time, frame.end_time, {'val': self.ctext })
+            self.ctext = ''
+        else:
+            if self.ctext == '':
+                self.start_time = frame.start_time
+            newchr = chr(cc)
+            if str(newchr).isprintable():
+                self.ctext += newchr
+
+        return nf
+
+#------------------------------------------------------------------------------
+
 class PktCtx:
     def __init__(self, start_time, dstyle, portaddr):
         self.start_time = start_time
@@ -180,6 +202,7 @@ class PktCtx:
         self.pdata = 0
         self.dstyle = dstyle
         self.instrumentation = None
+        self.conctx = None
 
     def itm_process_data(self, frame):
         #if self.pcode is not 24:
@@ -201,14 +224,21 @@ class PktCtx:
             if paddr != self.portaddr:
                 return None
             else:
-                do_tag = 'console'
-                # CONSIDER: Like the "Text Messages" HLA-extension we should
-                # group all characters between newlines into single reported
+                # We group all characters between newlines into single reported
                 # frames to make it easier for the user to track whole
                 # messages that have been split across multiple TPIU packets.
+                if self.conctx is None:
+                    self.conctx = ConsoleCtx(frame.start_time)
+                nframes = []
                 for idx in range(self.size):
-                    data_str += '{0:c}'.format((self.pdata >> (idx * 8)) & 0xFF)
-                do_raw = False
+                    nf = self.conctx.cdata(frame, ((self.pdata >> (idx * 8)) & 0xFF))
+                    if nf != None:
+                        nframes.append(nf)
+                return nframes
+                # ALTERNATIVE: code if we want individual characters reported:
+                # for idx in range(self.size):
+                #    data_str += '{0:c}'.format((self.pdata >> (idx * 8)) & 0xFF)
+                # do_raw = False
 
         if self.dstyle is DecodeStyle.Instrumentation:
             if paddr != self.portaddr:
@@ -904,7 +934,11 @@ class ITMDWT(HighLevelAnalyzer):
                     for idx in range(len(tframes)):
                         iframe = self.ctx.run(tframes[idx])
                         if iframe != None:
-                            nf.append(iframe)
+                            if isinstance(iframe, list):
+                                nf += iframe
+                            else:
+                                nf.append(iframe)
+                            #nf.append(iframe)
                 else:
                     nf = None
         else:
