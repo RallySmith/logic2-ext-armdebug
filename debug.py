@@ -266,6 +266,8 @@ class PktCtx:
 
     def dwt_process_data(self, frame):
         self.end_time = frame.end_time
+        if self.dstyle == DecodeStyle.Console:
+            return None
         data_str = ''
         if self.pcode == DWT_ID_PC_SAMPLE:
             # The POSTCNT counter period determines the PC sampling interval
@@ -279,9 +281,9 @@ class PktCtx:
                     # Reserved
                     data_str += ' IDLE:{0:02X}'.format(self.pdata & 0xFF)
             elif self.size == 4:
-                data_str += ' PC={0:08X}'.format(self.pdata)
+                data_str += ' PC:{0:08X}'.format(self.pdata)
             else:
-                data_str += ' PC=Unrecognised'
+                data_str += ' PC:Unrecognised'
         elif self.pcode == DWT_ID_EXCEPTION:
             # 2-byte exception number and event descriptor:
             # byte0: ExceptionNumber[7..0]
