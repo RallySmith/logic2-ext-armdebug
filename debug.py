@@ -386,6 +386,8 @@ class PktCtx:
             # CONSIDER: output saleae frame showing 1-byte OVERFLOW
             self.start_time = None
         else:
+            if self.start_time == None:
+                self.start_time = frame.start_time
             source = (db & ITMDWTPP_TYPE_MASK)
             size = 0
 
