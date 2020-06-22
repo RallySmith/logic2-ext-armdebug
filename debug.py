@@ -975,13 +975,14 @@ class ITMDWT(HighLevelAnalyzer):
                 if isinstance(tframes, list):
                     nf = []
                     for idx in range(len(tframes)):
-                        iframe = self.ctx.run(tframes[idx])
-                        if iframe != None:
-                            if isinstance(iframe, list):
-                                nf += iframe
-                            else:
-                                nf.append(iframe)
-                            #nf.append(iframe)
+                        if tframes[idx].type == 'data':
+                            iframe = self.ctx.run(tframes[idx])
+                            if iframe != None:
+                                if isinstance(iframe, list):
+                                    nf += iframe
+                                else:
+                                    nf.append(iframe)
+                                #nf.append(iframe)
                 else:
                     nf = None
         else:
