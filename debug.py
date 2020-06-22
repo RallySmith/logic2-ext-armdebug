@@ -383,6 +383,7 @@ class PktCtx:
             self.ipage = 0
         elif (db == ITMDWTPP_OVERFLOW):
             # ignore and stay at HDR
+            # CONSIDER: output saleae frame showing 1-byte OVERFLOW
             self.start_time = None
         else:
             source = (db & ITMDWTPP_TYPE_MASK)
@@ -670,8 +671,10 @@ class PktCtx:
 #  A-J) indicates if this second byte correspondds to the new ID (F
 #  bit clear) or the previous ID (F bit set).
 
-# TODO:ISSUE: The SWO captured TPIU stream from a STM32F429I-DISCO
-# board seems to start half-way through a 16-byte packet.
+# ISSUE:INVESTIGATE: The SWO captured TPIU stream from a
+# STM32F429I-DISCO board sometimes seems to start half-way through a
+# 16-byte packet. Have seen offsets of 4-, 8- and 12-bytes into the
+# TPIU packet.
 
 class TPIUCtx:
     def __init__(self, tpdstyle, stream_match, offset):
@@ -737,25 +740,53 @@ class TPIUCtx:
 
             stream_start_time = self.start_time
             pending_nextstream = None
+            do_sync = False
+
+            # Prepare for next packet:
+            self.bidx = 0
 
             for idx in range(15):
                 pb = self.packet[idx][0]
                 bstart = self.packet[idx][1]
                 bend = self.packet[idx][2]
                 if idx & 1:
-                    databytes.append( (pb, bstart, bend) )
-
-                    if pending_nextstream != None:
-                        nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
-                        if nf != None:
-                            if isinstance(nf, list):
-                                frames += nf
-                            else:
-                                frames.append(nf)
-                        self.stream_active = pending_nextstream
-                        pending_nextstream = None
-                        databytes.clear()
-
+                    if do_sync:
+                        if pb == 0x7F:
+                            do_sync = False
+                            # Currently assumes we are always at the start of a TPIU packet:
+                            synclen = (idx + 1)
+                            sync_end_time = self.packet[idx][2]
+                            if sync_end_time == None:
+                                sync_end_time = frame.end_time
+                            for si in range(synclen):
+                                del self.packet[0]
+                            self.bidx = (16 - synclen)
+                            self.start_time = self.packet[0][1]
+                            data_str = 'BAD '
+                            if synclen == 2:
+                                data_str = 'Short '
+                            elif synclen == 4:
+                                data_str = ''
+                            data_str += 'Sync'
+                            nf = AnalyzerFrame('tpiu', stream_start_time, sync_end_time, {'val': data_str })
+                            frames.append(nf)
+                            break
+                        elif pb != 0xFF:
+                            data_str = "Expected FF"
+                            nf = AnalyzerFrame('err', stream_start_time, frame.end_time, {'val': data_str })
+                            frames.append(nf)
+                    else:
+                        databytes.append( (pb, bstart, bend) )
+                        if pending_nextstream != None:
+                            nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
+                            if nf != None:
+                                if isinstance(nf, list):
+                                    frames += nf
+                                else:
+                                    frames.append(nf)
+                            self.stream_active = pending_nextstream
+                            pending_nextstream = None
+                            databytes.clear()
                 else:
                     #even
                     if pb & 1:
@@ -767,24 +798,37 @@ class TPIUCtx:
                         # We should expect to see the active stream ID repeated
                         # (~10-frames) if we have continuous data from a single
                         # stream source.
-                        nextstream = (pb >> 1)
-                        if nextstream != self.stream_active:
-                            stream_start_time = self.packet[idx][1]
-                            if ((lsbits >> (idx >> 1)) & 1):
-                                # Next byte for previous stream:
-                                pending_nextstream = nextstream
-                            else:
-                                # Common with above:
-                                nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
-                                if nf != None:
-                                    if isinstance(nf, list):
-                                        frames += nf
-                                    else:
-                                        frames.append(nf)
-                                self.stream_active = nextstream
+                        #
+                        # ARM IHI 0029E D4.2.2/D4.2.3
+                        # Synchronisation packets are described as being output
+                        # periodically *between* frames
+                        #
+                        if pb == 0xFF:
+                            do_sync = True
+                        else:
+                            nextstream = (pb >> 1)
+                            if nextstream != self.stream_active:
+                                stream_start_time = self.packet[idx][1]
+                                if ((lsbits >> (idx >> 1)) & 1):
+                                    # Next byte for previous stream:
+                                    pending_nextstream = nextstream
+                                else:
+                                    # Common with above:
+                                    nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
+                                    if nf != None:
+                                        if isinstance(nf, list):
+                                            frames += nf
+                                        else:
+                                            frames.append(nf)
+                                    self.stream_active = nextstream
                     else:
-                        fb = (pb | ((lsbits >> (idx >> 1)) & 1))
-                        databytes.append( (fb, bstart, bend) )
+                        if do_sync:
+                            data_str = "Expected LongSync FF"
+                            nf = AnalyzerFrame('err', stream_start_time, frame.end_time, {'val': data_str })
+                            frames.append(nf)
+                        else:
+                            fb = (pb | ((lsbits >> (idx >> 1)) & 1))
+                            databytes.append( (fb, bstart, bend) )
 
             if len(databytes):
                 nf = self.dump_stream(stream_start_time, frame.end_time, self.stream_active, databytes)
@@ -793,9 +837,6 @@ class TPIUCtx:
                         frames += nf
                     else:
                         frames.append(nf)
-
-            # Prepare for next packet:
-            self.bidx = 0
 
         return frames
 
