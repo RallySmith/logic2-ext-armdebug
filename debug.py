@@ -45,6 +45,8 @@ class DecodeStyleTPIU(IntEnum):
 # ITM
 # Synchronisation:
 ITMDWTPP_SYNC = 0x00 # Terminated by single set bit after at least 47 bits.
+ITMDWTPP_SYNCEND = 0x80 # Our single set bit terminator
+
 # Basic encoding:
 # 0bXXXXXX00    protocol packets	0..6-bytes
 # 0bXXXXXXSS	source packets		1-, 2- or 4-bytes
@@ -203,6 +205,7 @@ class PktCtx:
         self.dstyle = dstyle
         self.instrumentation = None
         self.conctx = None
+        self.syncidx = 0
 
     def itm_process_data(self, frame):
         #if self.pcode is not 24:
@@ -377,10 +380,26 @@ class PktCtx:
     def hdr(self, frame, db):
         decoded = None
 
-        if (db == ITMDWTPP_SYNC):
+        if self.syncidx:
+            self.syncidx += 1
+            if self.syncidx == 6:
+                if db == ITMDWTPP_SYNCEND:
+                    data_str = 'SYNC'
+                    decoded = AnalyzerFrame('console', self.start_time, frame.end_time, {'val': data_str })
+                else:
+                    data_str = 'BadSync: Expected {0:02X} saw {1:02X}'.format(ITMDWTPP_SYNCEND, db)
+                    decoded = AnalyzerFrame('err', self.start_time, frame.end_time, {'val': data_str })
+                self.syncidx = 0
+            else:
+                if db != ITMDWTPP_SYNC:
+                    data_str = 'BadSync: Expected {0:02X} saw {1:02X}'.format(ITMDWTPP_SYNC, db)
+                    decoded = AnalyzerFrame('err', self.start_time, frame.end_time, {'val': data_str })
+                    self.syncidx = 0
+        elif (db == ITMDWTPP_SYNC):
             # ignore and stay at HDR
-            self.start_time = None
+            self.start_time = frame.start_time
             self.ipage = 0
+            self.syncidx = 1
         elif (db == ITMDWTPP_OVERFLOW):
             # ignore and stay at HDR
             # CONSIDER: output saleae frame showing 1-byte OVERFLOW
