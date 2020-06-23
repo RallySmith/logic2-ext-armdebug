@@ -384,8 +384,9 @@ class PktCtx:
             self.syncidx += 1
             if self.syncidx == 6:
                 if db == ITMDWTPP_SYNCEND:
-                    data_str = 'SYNC'
-                    decoded = AnalyzerFrame('console', self.start_time, frame.end_time, {'val': data_str })
+                    if self.dstyle != DecodeStyle.Console:
+                        data_str = 'SYNC'
+                        decoded = AnalyzerFrame('console', self.start_time, frame.end_time, {'val': data_str })
                 else:
                     data_str = 'BadSync: Expected {0:02X} saw {1:02X}'.format(ITMDWTPP_SYNCEND, db)
                     decoded = AnalyzerFrame('err', self.start_time, frame.end_time, {'val': data_str })
